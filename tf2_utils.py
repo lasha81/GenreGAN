@@ -93,7 +93,7 @@ def tf_shuffle_axis(value, axis=0, seed=None, name=None):
 def concat_with_label(t, label_orig):
     label = tf.cast(label_orig, tf.float32)
     data = tf.reshape(t, (t.shape[0],t.shape[1]*t.shape[2]*t.shape[3] ))
-    ret_data = tf.concat([label, data], axis=1)
+    ret_data = tf.concat([data, label], axis=1)
     return ret_data
 
 

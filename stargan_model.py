@@ -34,6 +34,7 @@ class StarGAN(object):
         self.adv_weight = args.adv_weight
         self.rec_weight = args.rec_weight
         self.cls_weight = args.cls_weight
+        self.diff_weight = args.diff_weight
         self.gan_type = args.gan_type
 
         self.model = args.model
@@ -41,6 +42,8 @@ class StarGAN(object):
         self.generator = build_generator
         self.number_of_domains = args.number_of_domains
         self.ld = args.ld
+
+        self.note_threshold = args.note_threshold
 
         self.criterionGAN = mae_criterion
 
@@ -146,8 +149,6 @@ class StarGAN(object):
         label_2 = 1
         label_3 = 2
 
-#        labels_1= np.full((data_1.shape[0], self.number_of_domains), label_1)
-#        labels_2 = np.full((data_2.shape[0], self.number_of_domains), label_2)
         labels_1 = np.full((data_1.shape[0]), label_1)
         labels_2 = np.full((data_2.shape[0]), label_2)
         labels_3 = np.full((data_3.shape[0]), label_3)
@@ -158,14 +159,6 @@ class StarGAN(object):
         combined_data_3 = list(zip(data_2, labels_3))
 
         data_all = np.concatenate((combined_data_1, combined_data_2, combined_data_3))
-
-        """
-        data_mixed = None
-        if self.model == 'partial':
-            data_mixed = dataA + dataB
-        if self.model == 'full':
-            data_mixed = glob('./datasets/JCP_mixed/*.*')
-        """
 
         if args.continue_train:
             if self.checkpoint.restore(self.checkpoint_manager.latest_checkpoint):
@@ -184,7 +177,9 @@ class StarGAN(object):
         g_cls_loss_metric = tf.keras.metrics.Mean('g_cls_loss', dtype=tf.float32)
         g_rec_loss_metric = tf.keras.metrics.Mean('g_rec_loss', dtype=tf.float32)
         d_adv_loss_metric = tf.keras.metrics.Mean('d_adv_loss', dtype=tf.float32)
+        adv_loss_metric = tf.keras.metrics.Mean('adv_loss', dtype=tf.float32)
         d_cls_loss_metric = tf.keras.metrics.Mean('d_cls_loss', dtype=tf.float32)
+        number_of_notes_metric = tf.keras.metrics.Mean('number_of_notes', dtype=tf.float32)
 
         current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         train_log_dir = 'tb_logs/gradient_tape/' + current_time + '/train'
@@ -231,8 +226,6 @@ class StarGAN(object):
                         labels_orig = tf.convert_to_tensor(batch_data[:, 1].astype(int))
                         labels_orig = tf.one_hot(labels_orig, depth= self.number_of_domains)
                         labels_target = tf_shuffle_axis(labels_orig, axis=1)
-                        #labels_orig = tf.reshape(labels_orig, shape=[-1, 1, 1, labels_orig.shape[-1]])
-                        #labels_orig = tf.tile(labels_orig, [1, x_real.shape[1], x_real.shape[2], 1])
                         real_x_with_target_label = concat_with_label(x_real, labels_target)
 
 
@@ -251,16 +244,23 @@ class StarGAN(object):
                             gp = self.gradient_penalty(real=x_real, fake=x_fake)
                         else:
                             gp = 0
+
+                        sum_difference = tf.abs(tf.reduce_sum(x_fake)-325*self.batch_size)
+                        print("sd {}".format(sum_difference.numpy()))
+
+
                         #g_adv_loss = generator_loss(loss_func=self.gan_type, fake=fake_logit)
-                        g_adv_loss = generator_loss(loss_func=self.gan_type, fake=fake_cls)
+                        #g_adv_loss = generator_loss(loss_func=self.gan_type, fake=fake_cls)
                         g_cls_loss = classification_loss(logit=fake_cls, label=labels_target)
                         g_rec_loss = L1_loss(x_real, x_recon)
 
-                        d_adv_loss = discriminator_loss(loss_func=self.gan_type, real=real_cls, fake=fake_cls) + gp
+
+                        #d_adv_loss = discriminator_loss(loss_func=self.gan_type, real=real_cls, fake=fake_cls) + gp
+                        adv_loss = discriminator_loss(loss_func=self.gan_type, real=real_cls, fake=fake_cls)
                         d_cls_loss = classification_loss(logit=real_cls, label=labels_orig)
 
-                        d_loss = self.adv_weight * d_adv_loss + self.cls_weight * d_cls_loss
-                        g_loss = self.adv_weight * g_adv_loss + self.cls_weight * g_cls_loss + self.rec_weight * g_rec_loss
+                        d_loss = -self.adv_weight * adv_loss + self.cls_weight * d_cls_loss
+                        g_loss = self.adv_weight * adv_loss + self.cls_weight * g_cls_loss + self.rec_weight * g_rec_loss + self.diff_weight * sum_difference
 
 
                     # Calculate the gradients for generator and discriminator
@@ -278,11 +278,13 @@ class StarGAN(object):
                     # tensorboard
                     g_loss_metric(g_loss)
                     d_loss_metric(d_loss)
-                    g_adv_loss_metric(g_adv_loss)
+                    #g_adv_loss_metric(g_adv_loss)
                     g_cls_loss_metric(g_cls_loss)
                     g_rec_loss_metric(g_rec_loss)
-                    d_adv_loss_metric(d_adv_loss)
+                    #d_adv_loss_metric(d_adv_loss)
+                    adv_loss_metric(adv_loss)
                     d_cls_loss_metric(d_cls_loss)
+                    number_of_notes_metric( len([1 for v in x_fake.numpy().flatten() if v > self.note_threshold]) / self.batch_size  )
                     # end tensorboard
                     print('=================================================================')
                     print(("Epoch: [%2d] [%4d/%4d] time: %4.4f D_loss: %6.2f, G_loss: %6.2f" %
@@ -297,11 +299,14 @@ class StarGAN(object):
                     with train_summary_writer.as_default():
                         tf.summary.scalar('d_loss', d_loss_metric.result(), step=counter)
                         tf.summary.scalar('g_loss', g_loss_metric.result(), step=counter)
-                        tf.summary.scalar('g_adv_loss', g_adv_loss_metric.result(), step=counter)
+                        #tf.summary.scalar('g_adv_loss', g_adv_loss_metric.result(), step=counter)
                         tf.summary.scalar('g_cls_loss', g_cls_loss_metric.result(), step=counter)
                         tf.summary.scalar('g_rec_loss', g_rec_loss_metric.result(), step=counter)
-                        tf.summary.scalar('d_adv_loss', d_adv_loss_metric.result(), step=counter)
+                        #tf.summary.scalar('d_adv_loss', d_adv_loss_metric.result(), step=counter)
+                        tf.summary.scalar('adv_loss', adv_loss_metric.result(), step=counter)
                         tf.summary.scalar('d_cls_loss', d_cls_loss_metric.result(), step=counter)
+                        tf.summary.scalar('number_of_notes', number_of_notes_metric.result(), step=counter)
+
 
                     d_loss_metric.reset_states()
                     g_loss_metric.reset_states()
@@ -310,6 +315,8 @@ class StarGAN(object):
                     g_rec_loss_metric.reset_states()
                     d_adv_loss_metric.reset_states()
                     d_cls_loss_metric.reset_states()
+                    adv_loss_metric.reset_states()
+                    number_of_notes_metric.reset_states()
 
 
 
@@ -325,9 +332,9 @@ class StarGAN(object):
                         os.makedirs(sample_dir)
 
                     # to binary, 0 denotes note off, 1 denotes note on
-                    samples = [to_binary(x_real, 0.5),
-                               to_binary(x_fake, 0.5),
-                               to_binary(x_recon, 0.5)]
+                    samples = [to_binary(x_real,  self.note_threshold),
+                               to_binary(x_fake,  self.note_threshold),
+                               to_binary(x_recon,  self.note_threshold)]
 
 
 
@@ -350,10 +357,14 @@ class StarGAN(object):
         index_target = tf.argmax(labels_target, axis=1)
 
         for rec_num in range(samples[0].shape[0]):
+
             save_midis(tf.reshape(samples[0][rec_num],(1,64,84,1)), './{}/{:02d}_{:04d}_{:04d}_{}to{}_real.mid'.format(sample_dir, epoch, idx, rec_num, index_orig[rec_num], index_target[rec_num]))
             save_midis(tf.reshape(samples[1][rec_num],(1,64,84,1)), './{}/{:02d}_{:04d}_{:04d}_{}to{}_generated.mid'.format(sample_dir, epoch, idx, rec_num, index_orig[rec_num], index_target[rec_num], rec_num))
             save_midis(tf.reshape(samples[2][rec_num],(1,64,84,1)), './{}/{:02d}_{:04d}_{:04d}_{}to{}_reconstructed.mid'.format(sample_dir, epoch, idx, rec_num, index_orig[rec_num], index_target[rec_num], rec_num))
+            np.save(('./{}/{:02d}_{:04d}_{:04d}_{}to{}_generated.npy'.format(sample_dir, epoch, idx, rec_num, index_orig[rec_num], index_target[rec_num], rec_num)),tf.reshape(samples[1][rec_num], (1, 64, 84, 1)).numpy())
 
+        print("real {}".format(np.mean(samples[0])))
+        print("fake {}".format(np.mean(samples[1])))
 
     def test(self, args):
         pass

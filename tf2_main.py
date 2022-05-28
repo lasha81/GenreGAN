@@ -41,9 +41,13 @@ parser.add_argument('--type', dest='type', default='classifier', help='cyclegan 
 parser.add_argument('--adv_weight', type=float, default=1, help='Weight about GAN')
 parser.add_argument('--rec_weight', type=float, default=10, help='Weight about Reconstruction')
 parser.add_argument('--cls_weight', type=float, default=10, help='Weight about Classification')
+parser.add_argument('--diff_weight', type=float, default=0.1, help='Weight for difference')
+
 parser.add_argument('--gan_type', type=str, default='gan', help='gan / lsgan / wgan-gp / wgan-lp / dragan / hinge')
 parser.add_argument('--number_of_domains', type=int, default=2)
 parser.add_argument('--ld', type=float, default=10.0, help='The gradient penalty lambda')
+parser.add_argument('--note_threshold', type=float, default=0.5, help='The note threshold')
+
 
 
 args = parser.parse_args()
@@ -95,19 +99,20 @@ args.max_size = 50
 args.model = 'base'
 args.sigma_d = 0
 
-args.print_freq = 100
+args.print_freq = 10
 args.tb_print_freq =10
 
 args.type = 'stargan'
-args.gan_type = 'gan'
 #args.type = 'cyclegan'
-#args.type = 'cyclegan_2'
+
+args.gan_type = 'gan'
+args.note_threshold = 0.1
 args.phase = 'train'
 
-#args.adv_weight = 1
+#args.adv_weight = 1diff_weight
 #args.cls_weight = 1
 #args.rec_weight = 1
-
+args.diff_weight = 0.01
 args.number_of_domains = 3
 
 ########################
@@ -125,11 +130,6 @@ if __name__ == '__main__':
     if args.type == 'cyclegan':
 
         model = CycleGAN(args)
-        model.train(args) if args.phase == 'train' else model.test(args)
-
-    if args.type == 'cyclegan_2':
-
-        model = CycleGAN_2(args)
         model.train(args) if args.phase == 'train' else model.test(args)
 
     if args.type == 'stargan':

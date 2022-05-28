@@ -236,6 +236,7 @@ def build_generator(options, name='Generator'):
                  name=name)
 
 
+
 def build_discriminator_classifier(options, name='Discriminator_Classifier'):
 
     initializer = tf.random_normal_initializer(0., 0.02)
