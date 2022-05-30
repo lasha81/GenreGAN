@@ -5,7 +5,7 @@ from glob import glob
 import numpy as np
 from collections import namedtuple
 import tensorflow as tf
-#tf.compat.v1.disable_eager_execution()
+
 from tensorflow.keras.optimizers import Adam
 
 from stargan_module import build_generator, build_discriminator, abs_criterion, mae_criterion, discriminator_loss, \
@@ -83,26 +83,12 @@ class StarGAN(object):
         self.discriminator_star = self.discriminator(self.options,
                                                      name='Discriminator_star')
 
-        """
-        if self.model != 'base':
-            self.discriminator_A_all = self.discriminator(self.options,
-                                                          name='Discriminator_A_all')
-            self.discriminator_B_all = self.discriminator(self.options,
-                                                          name='Discriminator_B_all')
-        """
         # Discriminator and Generator Optimizer
         self.D_optimizer = Adam(self.lr,
                                 beta_1=args.beta1)
         self.G_optimizer = Adam(self.lr,
                                 beta_1=args.beta1)
 
-        """
-        if self.model != 'base':
-            self.DA_all_optimizer = Adam(self.lr,
-                                         beta_1=args.beta1)
-            self.DB_all_optimizer = Adam(self.lr,
-                                         beta_1=args.beta1)
-        """
         # Checkpoints
         model_name = "stargan.model"
         model_dir = "stargan_{}2{}_{}_{}_{}".format(self.dataset_A_dir,
@@ -191,8 +177,6 @@ class StarGAN(object):
             # Shuffle training data
             np.random.shuffle(data_all)
 
-            #if self.model != 'base' and data_mixed is not None:
-            #    np.random.shuffle(data_mixed)
 
             # Get the proper number of batches
             batch_idxs = len(data_all) // self.batch_size
@@ -219,76 +203,74 @@ class StarGAN(object):
                                                           self.pitch_range,
                                                           self.input_c_dim])).astype(np.float32)
 
-                if self.model == 'base':
+                with tf.GradientTape(persistent=True) as gen_tape, tf.GradientTape(persistent=True) as disc_tape:
 
-                    with tf.GradientTape(persistent=True) as gen_tape, tf.GradientTape(persistent=True) as disc_tape:
-
-                        labels_orig = tf.convert_to_tensor(batch_data[:, 1].astype(int))
-                        labels_orig = tf.one_hot(labels_orig, depth= self.number_of_domains)
-                        labels_target = tf_shuffle_axis(labels_orig, axis=1)
-                        real_x_with_target_label = concat_with_label(x_real, labels_target)
+                    labels_orig = tf.convert_to_tensor(batch_data[:, 1].astype(int))
+                    labels_orig = tf.one_hot(labels_orig, depth= self.number_of_domains)
+                    labels_target = tf_shuffle_axis(labels_orig, axis=1)
+                    real_x_with_target_label = concat_with_label(x_real, labels_target)
 
 
-                        """ Define Generator, Discriminator """
+                    """ Define Generator, Discriminator """
 
-                        x_fake = self.generator_star(real_x_with_target_label, training=True)
-                        fake_x_with_orig_label = concat_with_label(x_fake, labels_orig)
-                        x_recon = self.generator_star(fake_x_with_orig_label, training=True)
-
-
-                        real_cls = self.discriminator_star(x_real)
-                        fake_cls = self.discriminator_star(x_fake)
-
-                        """ Define Loss """
-                        if self.gan_type.__contains__('wgan') or self.gan_type == 'dragan':
-                            gp = self.gradient_penalty(real=x_real, fake=x_fake)
-                        else:
-                            gp = 0
-
-                        sum_difference = tf.abs(tf.reduce_sum(x_fake)-325*self.batch_size)
-                        print("sd {}".format(sum_difference.numpy()))
+                    x_fake = self.generator_star(real_x_with_target_label, training=True)
+                    fake_x_with_orig_label = concat_with_label(x_fake, labels_orig)
+                    x_recon = self.generator_star(fake_x_with_orig_label, training=True)
 
 
-                        #g_adv_loss = generator_loss(loss_func=self.gan_type, fake=fake_logit)
-                        #g_adv_loss = generator_loss(loss_func=self.gan_type, fake=fake_cls)
-                        g_cls_loss = classification_loss(logit=fake_cls, label=labels_target)
-                        g_rec_loss = L1_loss(x_real, x_recon)
+                    real_cls = self.discriminator_star(x_real)
+                    fake_cls = self.discriminator_star(x_fake)
+
+                    """ Define Loss """
+                    if self.gan_type.__contains__('wgan') or self.gan_type == 'dragan':
+                        gp = self.gradient_penalty(real=x_real, fake=x_fake)
+                    else:
+                        gp = 0
+
+                    sum_difference = tf.abs(tf.reduce_sum(x_fake)-325*self.batch_size)
+                    #print("sd {}".format(sum_difference.numpy()))
 
 
-                        #d_adv_loss = discriminator_loss(loss_func=self.gan_type, real=real_cls, fake=fake_cls) + gp
-                        adv_loss = discriminator_loss(loss_func=self.gan_type, real=real_cls, fake=fake_cls)
-                        d_cls_loss = classification_loss(logit=real_cls, label=labels_orig)
-
-                        d_loss = -self.adv_weight * adv_loss + self.cls_weight * d_cls_loss
-                        g_loss = self.adv_weight * adv_loss + self.cls_weight * g_cls_loss + self.rec_weight * g_rec_loss + self.diff_weight * sum_difference
+                    #g_adv_loss = generator_loss(loss_func=self.gan_type, fake=fake_logit)
+                    #g_adv_loss = generator_loss(loss_func=self.gan_type, fake=fake_cls)
+                    g_cls_loss = classification_loss(logit=fake_cls, label=labels_target)
+                    g_rec_loss = L1_loss(x_real, x_recon)
 
 
-                    # Calculate the gradients for generator and discriminator
-                    generator_gradients = gen_tape.gradient(target=g_loss,
-                                                            sources=self.generator_star.trainable_variables)
-                    discriminator_gradients = disc_tape.gradient(target=d_loss,
-                                                                 sources=self.discriminator_star.trainable_variables)
+                    #d_adv_loss = discriminator_loss(loss_func=self.gan_type, real=real_cls, fake=fake_cls) + gp
+                    adv_loss = discriminator_loss(loss_func=self.gan_type, real=real_cls, fake=fake_cls) + gp
+                    d_cls_loss = classification_loss(logit=real_cls, label=labels_orig)
 
-                    # Apply the gradients to the optimizer
-                    self.G_optimizer.apply_gradients(zip(generator_gradients,
-                                                         self.generator_star.trainable_variables))
-                    self.D_optimizer.apply_gradients(zip(discriminator_gradients,
-                                                         self.discriminator_star.trainable_variables))
+                    d_loss = -self.adv_weight * adv_loss + self.cls_weight * d_cls_loss
+                    g_loss = self.adv_weight * adv_loss + self.cls_weight * g_cls_loss + self.rec_weight * g_rec_loss + self.diff_weight * sum_difference
 
-                    # tensorboard
-                    g_loss_metric(g_loss)
-                    d_loss_metric(d_loss)
-                    #g_adv_loss_metric(g_adv_loss)
-                    g_cls_loss_metric(g_cls_loss)
-                    g_rec_loss_metric(g_rec_loss)
-                    #d_adv_loss_metric(d_adv_loss)
-                    adv_loss_metric(adv_loss)
-                    d_cls_loss_metric(d_cls_loss)
-                    number_of_notes_metric( len([1 for v in x_fake.numpy().flatten() if v > self.note_threshold]) / self.batch_size  )
-                    # end tensorboard
-                    print('=================================================================')
-                    print(("Epoch: [%2d] [%4d/%4d] time: %4.4f D_loss: %6.2f, G_loss: %6.2f" %
-                           (epoch, idx, batch_idxs, time.time() - start_time, d_loss, g_loss)))
+
+                # Calculate the gradients for generator and discriminator
+                generator_gradients = gen_tape.gradient(target=g_loss,
+                                                        sources=self.generator_star.trainable_variables)
+                discriminator_gradients = disc_tape.gradient(target=d_loss,
+                                                             sources=self.discriminator_star.trainable_variables)
+
+                # Apply the gradients to the optimizer
+                self.G_optimizer.apply_gradients(zip(generator_gradients,
+                                                     self.generator_star.trainable_variables))
+                self.D_optimizer.apply_gradients(zip(discriminator_gradients,
+                                                     self.discriminator_star.trainable_variables))
+
+                # tensorboard
+                g_loss_metric(g_loss)
+                d_loss_metric(d_loss)
+                #g_adv_loss_metric(g_adv_loss)
+                g_cls_loss_metric(g_cls_loss)
+                g_rec_loss_metric(g_rec_loss)
+                #d_adv_loss_metric(d_adv_loss)
+                adv_loss_metric(adv_loss)
+                d_cls_loss_metric(d_cls_loss)
+                number_of_notes_metric( len([1 for v in x_fake.numpy().flatten() if v > self.note_threshold]) / self.batch_size  )
+                # end tensorboard
+                print('=================================================================')
+                print(("Epoch: [%2d] [%4d/%4d] time: %4.4f D_loss: %6.2f, G_loss: %6.2f" %
+                       (epoch, idx, batch_idxs, time.time() - start_time, d_loss, g_loss)))
 
                 counter += 1
 
@@ -362,16 +344,6 @@ class StarGAN(object):
             save_midis(tf.reshape(samples[1][rec_num],(1,64,84,1)), './{}/{:02d}_{:04d}_{:04d}_{}to{}_generated.mid'.format(sample_dir, epoch, idx, rec_num, index_orig[rec_num], index_target[rec_num], rec_num))
             save_midis(tf.reshape(samples[2][rec_num],(1,64,84,1)), './{}/{:02d}_{:04d}_{:04d}_{}to{}_reconstructed.mid'.format(sample_dir, epoch, idx, rec_num, index_orig[rec_num], index_target[rec_num], rec_num))
             np.save(('./{}/{:02d}_{:04d}_{:04d}_{}to{}_generated.npy'.format(sample_dir, epoch, idx, rec_num, index_orig[rec_num], index_target[rec_num], rec_num)),tf.reshape(samples[1][rec_num], (1, 64, 84, 1)).numpy())
-
-        print("real {}".format(np.mean(samples[0])))
-        print("fake {}".format(np.mean(samples[1])))
-
-    def test(self, args):
-        pass
-
-    def test_famous(self, args):
-        pass
-
 
 
     def gradient_penalty(self, real, fake, scope="discriminator"):

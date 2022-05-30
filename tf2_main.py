@@ -2,7 +2,6 @@ import argparse
 import os
 from tf2_model import CycleGAN
 from stargan_model import StarGAN
-from tf2_2_model import CycleGAN_2
 from tf2_classifier import Classifier
 
 parser = argparse.ArgumentParser(description='')
